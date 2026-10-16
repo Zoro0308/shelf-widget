@@ -1,0 +1,1703 @@
+name: Build ShelfWidget APK
+
+# ─── Triggers ──────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. JDK 17 ─────────────────────────────────────────────────────────────
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # ── 3. Project directory structure ────────────────────────────────────────
+      - name: Create directory structure
+        run: |
+          mkdir -p app/src/main/kotlin/com/example/shelfwidget
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/xml
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          mkdir -p gradle/wrapper
+
+      # ── 4. settings.gradle.kts ────────────────────────────────────────────────
+      - name: Generate settings.gradle.kts
+        run: |
+          cat > settings.gradle.kts << 'ENDOFFILE'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "ShelfWidget"
+          include(":app")
+          ENDOFFILE
+
+      # ── 5. Root build.gradle.kts ──────────────────────────────────────────────
+      - name: Generate root build.gradle.kts
+        run: |
+          cat > build.gradle.kts << 'ENDOFFILE'
+          // Top-level build file. Plugin versions are declared here and applied false.
+          // AGP 8.1.4 + Kotlin 1.9.21 tested against compileSdk 34 / JDK 17 / Gradle 8.4.
+          plugins {
+              id("com.android.application") version "8.1.4" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.21" apply false
+          }
+          ENDOFFILE
+
+      # ── 6. app/build.gradle.kts ───────────────────────────────────────────────
+      - name: Generate app/build.gradle.kts
+        run: |
+          cat > app/build.gradle.kts << 'ENDOFFILE'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.shelfwidget"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.shelfwidget"
+                  minSdk = 26        // Android 8.0 Oreo – all modern Xiaomi devices
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  debug {
+                      isDebuggable = true
+                  }
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              // Kotlin sources live under src/main/kotlin
+              sourceSets {
+                  getByName("main") {
+                      java.srcDirs("src/main/kotlin")
+                  }
+              }
+          }
+
+          dependencies {
+              // Core AndroidX
+              implementation("androidx.core:core-ktx:1.12.0")
+              implementation("androidx.appcompat:appcompat:1.6.1")
+              implementation("com.google.android.material:material:1.11.0")
+              implementation("androidx.recyclerview:recyclerview:1.3.2")
+              implementation("androidx.activity:activity-ktx:1.8.2")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+              implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+
+              // Coroutines – off-thread icon / package resolution
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+          }
+          ENDOFFILE
+
+      # ── 7. gradle.properties ──────────────────────────────────────────────────
+      - name: Generate gradle.properties
+        run: |
+          cat > gradle.properties << 'ENDOFFILE'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          ENDOFFILE
+
+      # ── 8. Bootstrap Gradle 8.4 wrapper ───────────────────────────────────────
+      - name: Bootstrap Gradle wrapper
+        run: |
+          echo "Downloading Gradle 8.4 to generate wrapper files..."
+          wget -q "https://services.gradle.org/distributions/gradle-8.4-bin.zip" -O /tmp/gradle-8.4-bin.zip
+          unzip -q /tmp/gradle-8.4-bin.zip -d /tmp/gradle-dist
+          /tmp/gradle-dist/gradle-8.4/bin/gradle wrapper \
+            --gradle-version 8.4 \
+            --distribution-type bin
+          chmod +x gradlew
+          echo "Wrapper ready:"
+          ls -lh gradle/wrapper/
+
+      # ── 9. AndroidManifest.xml ────────────────────────────────────────────────
+      - name: Generate AndroidManifest.xml
+        run: |
+          cat > app/src/main/AndroidManifest.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <!--
+                  Package-visibility: let the app see all MAIN/LAUNCHER activities so the
+                  app-picker can enumerate installed apps.  No INTERNET permission is declared.
+                  ShelfWidget is fully offline after installation.
+              -->
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN"/>
+                      <category android:name="android.intent.category.LAUNCHER"/>
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.ShelfWidget">
+
+                  <!-- Launcher / configuration activity -->
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:label="@string/app_name_full"
+                      android:launchMode="singleTop">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+
+                  <!-- App-picker (internal only) -->
+                  <activity
+                      android:name=".AppPickerActivity"
+                      android:exported="false"
+                      android:label="@string/pick_app_title"/>
+
+                  <!-- Widget receiver -->
+                  <receiver
+                      android:name=".ShelfWidgetProvider"
+                      android:exported="true"
+                      android:label="ShelfWidget">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.appwidget.provider"
+                          android:resource="@xml/shelf_widget_info"/>
+                  </receiver>
+
+              </application>
+          </manifest>
+          ENDOFFILE
+
+      # ── 10. Kotlin: AppInfo data class ────────────────────────────────────────
+      - name: Generate AppInfo.kt
+        run: |
+          cat > app/src/main/kotlin/com/example/shelfwidget/AppInfo.kt << 'ENDOFFILE'
+          package com.example.shelfwidget
+
+          import android.graphics.drawable.Drawable
+
+          /**
+           * Lightweight holder for a launchable application's display metadata.
+           * The [icon] drawable is resolved on a background thread in [AppPickerActivity].
+           */
+          data class AppInfo(
+              val name: String,
+              val packageName: String,
+              val icon: Drawable
+          )
+          ENDOFFILE
+
+      # ── 11. Kotlin: ShelfPreferences ─────────────────────────────────────────
+      - name: Generate ShelfPreferences.kt
+        run: |
+          cat > app/src/main/kotlin/com/example/shelfwidget/ShelfPreferences.kt << 'ENDOFFILE'
+          package com.example.shelfwidget
+
+          import android.content.Context
+          import android.content.SharedPreferences
+
+          /**
+           * Per-instance, per-slot preference store.
+           *
+           * Every widget instance is identified by its [appWidgetId].
+           * Each of its 12 slots (0-11) stores the package name of the assigned app
+           * independently.  Key scheme: "w<widgetId>_s<slotIndex>"
+           *
+           * Two widget instances can never share or overwrite each other's assignments.
+           */
+          class ShelfPreferences(context: Context) {
+
+              private val prefs: SharedPreferences =
+                  context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+              companion object {
+                  private const val PREFS_NAME = "shelf_widget_prefs"
+                  private fun key(appWidgetId: Int, slotIndex: Int) =
+                      "w${appWidgetId}_s${slotIndex}"
+              }
+
+              fun saveAppToSlot(appWidgetId: Int, slotIndex: Int, packageName: String) {
+                  prefs.edit().putString(key(appWidgetId, slotIndex), packageName).apply()
+              }
+
+              fun getAppForSlot(appWidgetId: Int, slotIndex: Int): String? =
+                  prefs.getString(key(appWidgetId, slotIndex), null)
+
+              fun clearSlot(appWidgetId: Int, slotIndex: Int) {
+                  prefs.edit().remove(key(appWidgetId, slotIndex)).apply()
+              }
+
+              fun getAllSlots(appWidgetId: Int): Map<Int, String> =
+                  (0..11).mapNotNull { i ->
+                      getAppForSlot(appWidgetId, i)?.let { pkg -> i to pkg }
+                  }.toMap()
+
+              /** Remove ALL preference entries for [appWidgetId]. Call from onDeleted(). */
+              fun clearWidget(appWidgetId: Int) {
+                  prefs.edit().also { ed ->
+                      (0..11).forEach { i -> ed.remove(key(appWidgetId, i)) }
+                  }.apply()
+              }
+          }
+          ENDOFFILE
+
+      # ── 12. Kotlin: ShelfCanvasRenderer ──────────────────────────────────────
+      - name: Generate ShelfCanvasRenderer.kt
+        run: |
+          cat > app/src/main/kotlin/com/example/shelfwidget/ShelfCanvasRenderer.kt << 'ENDOFFILE'
+          package com.example.shelfwidget
+
+          import android.graphics.Bitmap
+          import android.graphics.BlurMaskFilter
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.LinearGradient
+          import android.graphics.Paint
+          import android.graphics.RectF
+          import android.graphics.Shader
+
+          /**
+           * Procedural 2.5-D frosted-glass shelf renderer.
+           *
+           * Signature: renderShelves(width: Int, height: Int, density: Float): Bitmap
+           *
+           * All geometry is density-aware. dp values are multiplied by [density]
+           * (DisplayMetrics.density) to obtain pixels. No static PNG/JPEG images are used.
+           * The entire background is generated with Canvas + Paint + LinearGradient.
+           *
+           * One Bitmap is cached by (width x height x density). The cache is invalidated
+           * on resize or when clearCache() is called.
+           */
+          object ShelfCanvasRenderer {
+
+              private var cachedBitmap : Bitmap? = null
+              private var cacheW       : Int     = 0
+              private var cacheH       : Int     = 0
+              private var cacheDensity : Float   = 0f
+
+              fun renderShelves(width: Int, height: Int, density: Float): Bitmap {
+                  // Guard against invalid or excessively large dimensions
+                  val safeW = width.coerceIn(1, 2048)
+                  val safeH = height.coerceIn(1, 2048)
+
+                  // Return cached bitmap if dimensions and density match
+                  cachedBitmap?.takeIf {
+                      !it.isRecycled &&
+                      cacheW == safeW && cacheH == safeH && cacheDensity == density
+                  }?.let { return it }
+
+                  clearCache()
+
+                  val bitmap = Bitmap.createBitmap(safeW, safeH, Bitmap.Config.ARGB_8888)
+                  val canvas = Canvas(bitmap)
+                  canvas.drawColor(Color.TRANSPARENT) // transparent background
+
+                  val hMargin  = 14f * density
+                  val shelfH   = (safeH * 0.13f).coerceIn(16f * density, 40f * density)
+                  val cornerR  = shelfH * 0.42f
+                  val topPad   = safeH * 0.04f
+                  val rowH     = (safeH - topPad) / 4f
+
+                  for (i in 0..3) {
+                      // Centre each shelf within its quarter-row
+                      val shelfCY  = topPad + i * rowH + rowH * 0.52f
+                      val shelfTop = shelfCY - shelfH * 0.5f
+                      drawShelf(canvas, hMargin, shelfTop, safeW - hMargin, shelfH, cornerR, density)
+                  }
+
+                  cachedBitmap  = bitmap
+                  cacheW        = safeW
+                  cacheH        = safeH
+                  cacheDensity  = density
+                  return bitmap
+              }
+
+              /** Render one frosted-glass shelf plank. Layers: shadow → body → specular → rim. */
+              private fun drawShelf(
+                  canvas : Canvas,
+                  left   : Float, top: Float, right: Float,
+                  shelfH : Float, cornerR: Float, density: Float
+              ) {
+                  val bottom = top + shelfH
+                  val rect   = RectF(left, top, right, bottom)
+
+                  // Drop shadow
+                  val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      maskFilter = BlurMaskFilter(7f * density, BlurMaskFilter.Blur.NORMAL)
+                      color      = Color.argb(100, 0, 10, 40)
+                  }
+                  canvas.drawRoundRect(
+                      RectF(left + density, top + 4f * density,
+                            right - density, bottom + 6f * density),
+                      cornerR, cornerR, shadowPaint
+                  )
+
+                  // Glass body - layered translucent gradient
+                  val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      shader = LinearGradient(
+                          left, top, left, bottom,
+                          intArrayOf(
+                              Color.argb(215, 238, 248, 255),
+                              Color.argb(165, 195, 220, 245),
+                              Color.argb(185, 215, 232, 252),
+                              Color.argb(135, 170, 208, 240)
+                          ),
+                          floatArrayOf(0f, 0.30f, 0.68f, 1f),
+                          Shader.TileMode.CLAMP
+                      )
+                  }
+                  canvas.drawRoundRect(rect, cornerR, cornerR, bodyPaint)
+
+                  // Top specular highlight
+                  val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      shader = LinearGradient(
+                          left, top, left, top + shelfH * 0.38f,
+                          intArrayOf(Color.argb(230, 255, 255, 255),
+                                     Color.argb(0,   255, 255, 255)),
+                          null, Shader.TileMode.CLAMP
+                      )
+                  }
+                  canvas.drawRoundRect(
+                      RectF(left + 3f * density, top,
+                            right - 3f * density, top + shelfH * 0.58f),
+                      cornerR, cornerR, highlightPaint
+                  )
+
+                  // Bottom reflection shimmer
+                  val reflPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      shader = LinearGradient(
+                          left, bottom - shelfH * 0.25f, left, bottom,
+                          intArrayOf(Color.argb(0,   255, 255, 255),
+                                     Color.argb(115, 255, 255, 255)),
+                          null, Shader.TileMode.CLAMP
+                      )
+                  }
+                  canvas.drawRoundRect(
+                      RectF(left + cornerR * 0.5f, bottom - shelfH * 0.30f,
+                            right - cornerR * 0.5f, bottom),
+                      cornerR * 0.3f, cornerR * 0.3f, reflPaint
+                  )
+
+                  // Outer rim
+                  val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      style       = Paint.Style.STROKE
+                      strokeWidth = density
+                      color       = Color.argb(150, 255, 255, 255)
+                  }
+                  canvas.drawRoundRect(rect, cornerR, cornerR, rimPaint)
+              }
+
+              /** Recycle the cached Bitmap and reset cache state. */
+              fun clearCache() {
+                  cachedBitmap?.let { if (!it.isRecycled) it.recycle() }
+                  cachedBitmap = null
+                  cacheW = 0; cacheH = 0; cacheDensity = 0f
+              }
+          }
+          ENDOFFILE
+
+      # ── 13. Kotlin: ShelfWidgetProvider ──────────────────────────────────────
+      - name: Generate ShelfWidgetProvider.kt
+        run: |
+          cat > app/src/main/kotlin/com/example/shelfwidget/ShelfWidgetProvider.kt << 'ENDOFFILE'
+          package com.example.shelfwidget
+
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.appwidget.AppWidgetProvider
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.graphics.Bitmap
+          import android.graphics.Canvas
+          import android.graphics.drawable.BitmapDrawable
+          import android.graphics.drawable.Drawable
+          import android.os.Bundle
+          import android.util.Log
+          import android.view.View
+          import android.widget.RemoteViews
+          import kotlinx.coroutines.CoroutineScope
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.SupervisorJob
+          import kotlinx.coroutines.launch
+
+          /**
+           * Home-screen widget provider for ShelfWidget.
+           *
+           * Each widget instance (appWidgetId) has its own independent 12-slot assignment
+           * stored via ShelfPreferences. Updates run on Dispatchers.IO via goAsync() so
+           * the system does not kill the receiver process before rendering completes.
+           */
+          class ShelfWidgetProvider : AppWidgetProvider() {
+
+              companion object {
+                  private const val TAG = "ShelfWidgetProvider"
+
+                  /** Passed to MainActivity when the user taps an empty widget slot. */
+                  const val EXTRA_SLOT_INDEX = "com.example.shelfwidget.EXTRA_SLOT_INDEX"
+
+                  private val SLOT_IDS = intArrayOf(
+                      R.id.slot_0,  R.id.slot_1,  R.id.slot_2,
+                      R.id.slot_3,  R.id.slot_4,  R.id.slot_5,
+                      R.id.slot_6,  R.id.slot_7,  R.id.slot_8,
+                      R.id.slot_9,  R.id.slot_10, R.id.slot_11
+                  )
+                  private val ICON_IDS = intArrayOf(
+                      R.id.icon_0,  R.id.icon_1,  R.id.icon_2,
+                      R.id.icon_3,  R.id.icon_4,  R.id.icon_5,
+                      R.id.icon_6,  R.id.icon_7,  R.id.icon_8,
+                      R.id.icon_9,  R.id.icon_10, R.id.icon_11
+                  )
+
+                  private const val ICON_DP = 48
+              }
+
+              override fun onUpdate(
+                  context: Context,
+                  appWidgetManager: AppWidgetManager,
+                  appWidgetIds: IntArray
+              ) {
+                  val pr = goAsync()
+                  CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+                      try {
+                          for (id in appWidgetIds) {
+                              updateSingleWidget(context, appWidgetManager, id)
+                          }
+                      } catch (e: Exception) {
+                          Log.e(TAG, "onUpdate failed", e)
+                      } finally {
+                          pr.finish()
+                      }
+                  }
+              }
+
+              override fun onAppWidgetOptionsChanged(
+                  context: Context,
+                  appWidgetManager: AppWidgetManager,
+                  appWidgetId: Int,
+                  newOptions: Bundle
+              ) {
+                  ShelfCanvasRenderer.clearCache()
+                  val pr = goAsync()
+                  CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+                      try {
+                          updateSingleWidget(context, appWidgetManager, appWidgetId)
+                      } finally {
+                          pr.finish()
+                      }
+                  }
+              }
+
+              override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+                  val prefs = ShelfPreferences(context)
+                  for (id in appWidgetIds) {
+                      prefs.clearWidget(id)
+                      Log.d(TAG, "Cleared preferences for widget $id")
+                  }
+              }
+
+              override fun onDisabled(context: Context) {
+                  ShelfCanvasRenderer.clearCache()
+              }
+
+              private fun updateSingleWidget(
+                  context: Context,
+                  appWidgetManager: AppWidgetManager,
+                  appWidgetId: Int
+              ) {
+                  val options    = appWidgetManager.getAppWidgetOptions(appWidgetId)
+                  val density    = context.resources.displayMetrics.density
+                  val maxWDp     = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,  300)
+                  val maxHDp     = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 300)
+                  val widthPx    = (maxWDp  * density).toInt().coerceIn(60, 2048)
+                  val heightPx   = (maxHDp  * density).toInt().coerceIn(60, 2048)
+                  val iconSizePx = (ICON_DP * density).toInt().coerceIn(48, 192)
+
+                  val shelfBitmap = ShelfCanvasRenderer.renderShelves(widthPx, heightPx, density)
+                  val prefs       = ShelfPreferences(context)
+                  val assignments = prefs.getAllSlots(appWidgetId)
+                  val pm          = context.packageManager
+
+                  val views = RemoteViews(context.packageName, R.layout.widget_shelf)
+                  views.setImageViewBitmap(R.id.shelf_background, shelfBitmap)
+
+                  for (slotIndex in 0..11) {
+                      val slotId      = SLOT_IDS[slotIndex]
+                      val iconId      = ICON_IDS[slotIndex]
+                      val packageName = assignments[slotIndex]
+
+                      if (packageName != null) {
+                          val iconBitmap = resolveIcon(pm, packageName, iconSizePx)
+                          if (iconBitmap != null) {
+                              views.setImageViewBitmap(iconId, iconBitmap)
+                              views.setViewVisibility(iconId, View.VISIBLE)
+                              val launchIntent = pm.getLaunchIntentForPackage(packageName)
+                              val pending = if (launchIntent != null) {
+                                  launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                  PendingIntent.getActivity(
+                                      context, appWidgetId * 100 + slotIndex, launchIntent,
+                                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                                  )
+                              } else {
+                                  buildConfigPendingIntent(context, appWidgetId, slotIndex)
+                              }
+                              views.setOnClickPendingIntent(slotId, pending)
+                          } else {
+                              views.setViewVisibility(iconId, View.INVISIBLE)
+                              views.setOnClickPendingIntent(slotId,
+                                  buildConfigPendingIntent(context, appWidgetId, slotIndex))
+                          }
+                      } else {
+                          views.setViewVisibility(iconId, View.INVISIBLE)
+                          views.setOnClickPendingIntent(slotId,
+                              buildConfigPendingIntent(context, appWidgetId, slotIndex))
+                      }
+                  }
+
+                  appWidgetManager.updateAppWidget(appWidgetId, views)
+              }
+
+              private fun resolveIcon(pm: PackageManager, packageName: String, sizePx: Int): Bitmap? {
+                  return try {
+                      val ai = pm.getApplicationInfo(packageName, 0)
+                      drawableToBitmap(pm.getApplicationIcon(ai), sizePx)
+                  } catch (e: PackageManager.NameNotFoundException) { null }
+              }
+
+              private fun drawableToBitmap(drawable: Drawable, size: Int): Bitmap {
+                  if (drawable is BitmapDrawable && drawable.bitmap != null) {
+                      return Bitmap.createScaledBitmap(drawable.bitmap, size, size, true)
+                  }
+                  val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                  val canvas = Canvas(bmp)
+                  drawable.setBounds(0, 0, size, size)
+                  drawable.draw(canvas)
+                  return bmp
+              }
+
+              private fun buildConfigPendingIntent(
+                  context: Context, appWidgetId: Int, slotIndex: Int
+              ): PendingIntent {
+                  val intent = Intent(context, MainActivity::class.java).apply {
+                      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                      putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                      putExtra(EXTRA_SLOT_INDEX, slotIndex)
+                  }
+                  return PendingIntent.getActivity(
+                      context, appWidgetId * 100 + slotIndex, intent,
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                  )
+              }
+          }
+          ENDOFFILE
+
+      # ── 14. Kotlin: MainActivity ──────────────────────────────────────────────
+      - name: Generate MainActivity.kt
+        run: |
+          cat > app/src/main/kotlin/com/example/shelfwidget/MainActivity.kt << 'ENDOFFILE'
+          package com.example.shelfwidget
+
+          import android.appwidget.AppWidgetManager
+          import android.content.ComponentName
+          import android.content.Intent
+          import android.graphics.drawable.Drawable
+          import android.os.Bundle
+          import android.view.View
+          import android.widget.*
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.appcompat.app.AppCompatActivity
+
+          /**
+           * Companion configuration activity for ShelfWidget.
+           *
+           * Two launch modes:
+           *  1. Normal app icon: shows a widget-instance spinner then 12 slot cards.
+           *  2. Widget-placement config (intent carries EXTRA_APPWIDGET_ID): configures
+           *     that specific instance and returns RESULT_OK to the launcher on Apply.
+           *
+           * Long-press any slot card to clear it.
+           */
+          class MainActivity : AppCompatActivity() {
+
+              private var configWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+              private var activeWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+              private var pendingSlotIndex = -1
+
+              private lateinit var prefs: ShelfPreferences
+              private lateinit var noWidgetText : TextView
+              private lateinit var widgetSpinner: Spinner
+              private lateinit var slotSection  : View
+              private lateinit var applyButton  : Button
+
+              private val cardViews = mutableListOf<View>()
+              private val iconViews = mutableListOf<ImageView>()
+              private val nameViews = mutableListOf<TextView>()
+
+              private val pickerLauncher = registerForActivityResult(
+                  ActivityResultContracts.StartActivityForResult()
+              ) { result ->
+                  if (result.resultCode == RESULT_OK) {
+                      val pkg = result.data?.getStringExtra(AppPickerActivity.EXTRA_PACKAGE_NAME)
+                      if (pkg != null && pendingSlotIndex in 0..11
+                          && activeWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                          prefs.saveAppToSlot(activeWidgetId, pendingSlotIndex, pkg)
+                          refreshSlotDisplay()
+                      }
+                  }
+                  pendingSlotIndex = -1
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+                  supportActionBar?.title = getString(R.string.app_name_full)
+
+                  prefs = ShelfPreferences(this)
+
+                  configWidgetId = intent.getIntExtra(
+                      AppWidgetManager.EXTRA_APPWIDGET_ID,
+                      AppWidgetManager.INVALID_APPWIDGET_ID
+                  )
+                  if (configWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                      setResult(RESULT_CANCELED)
+                  }
+
+                  noWidgetText  = findViewById(R.id.no_widget_text)
+                  widgetSpinner = findViewById(R.id.widget_spinner)
+                  slotSection   = findViewById(R.id.slot_section)
+                  applyButton   = findViewById(R.id.apply_button)
+
+                  val cardIds = intArrayOf(
+                      R.id.slot_card_0,  R.id.slot_card_1,  R.id.slot_card_2,
+                      R.id.slot_card_3,  R.id.slot_card_4,  R.id.slot_card_5,
+                      R.id.slot_card_6,  R.id.slot_card_7,  R.id.slot_card_8,
+                      R.id.slot_card_9,  R.id.slot_card_10, R.id.slot_card_11
+                  )
+                  val iconIds = intArrayOf(
+                      R.id.slot_icon_0,  R.id.slot_icon_1,  R.id.slot_icon_2,
+                      R.id.slot_icon_3,  R.id.slot_icon_4,  R.id.slot_icon_5,
+                      R.id.slot_icon_6,  R.id.slot_icon_7,  R.id.slot_icon_8,
+                      R.id.slot_icon_9,  R.id.slot_icon_10, R.id.slot_icon_11
+                  )
+                  val nameIds = intArrayOf(
+                      R.id.slot_name_0,  R.id.slot_name_1,  R.id.slot_name_2,
+                      R.id.slot_name_3,  R.id.slot_name_4,  R.id.slot_name_5,
+                      R.id.slot_name_6,  R.id.slot_name_7,  R.id.slot_name_8,
+                      R.id.slot_name_9,  R.id.slot_name_10, R.id.slot_name_11
+                  )
+
+                  for (i in 0..11) {
+                      val card = findViewById<View>(cardIds[i])
+                      val icon = card.findViewById<ImageView>(iconIds[i])
+                      val name = card.findViewById<TextView>(nameIds[i])
+                      cardViews.add(card)
+                      iconViews.add(icon)
+                      nameViews.add(name)
+                      val idx = i
+                      card.setOnClickListener     { openPickerForSlot(idx) }
+                      card.setOnLongClickListener { clearSlot(idx); true   }
+                  }
+
+                  applyButton.setOnClickListener { applyAndRefresh() }
+                  populateWidgetSpinner()
+
+                  val initialSlot = intent.getIntExtra(ShelfWidgetProvider.EXTRA_SLOT_INDEX, -1)
+                  if (initialSlot in 0..11 && activeWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                      openPickerForSlot(initialSlot)
+                  }
+              }
+
+              private fun populateWidgetSpinner() {
+                  val awm = AppWidgetManager.getInstance(this)
+                  val cn  = ComponentName(this, ShelfWidgetProvider::class.java)
+                  val ids = awm.getAppWidgetIds(cn).toMutableList()
+
+                  if (configWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID
+                      && !ids.contains(configWidgetId)) {
+                      ids.add(0, configWidgetId)
+                  }
+
+                  if (ids.isEmpty()) {
+                      noWidgetText.visibility  = View.VISIBLE
+                      widgetSpinner.visibility = View.GONE
+                      slotSection.visibility   = View.GONE
+                      applyButton.visibility   = View.GONE
+                      return
+                  }
+
+                  noWidgetText.visibility  = View.GONE
+                  widgetSpinner.visibility = View.VISIBLE
+                  slotSection.visibility   = View.VISIBLE
+                  applyButton.visibility   = View.VISIBLE
+
+                  val labels  = ids.mapIndexed { i, id -> "Widget ${i + 1}  (id $id)" }
+                  val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+                  adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+                  widgetSpinner.adapter = adapter
+
+                  val sel = if (configWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID)
+                      ids.indexOf(configWidgetId).coerceAtLeast(0) else 0
+                  widgetSpinner.setSelection(sel)
+                  activeWidgetId = ids[sel]
+                  refreshSlotDisplay()
+
+                  widgetSpinner.onItemSelectedListener =
+                      object : AdapterView.OnItemSelectedListener {
+                          override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                              activeWidgetId = ids[pos]
+                              refreshSlotDisplay()
+                          }
+                          override fun onNothingSelected(p: AdapterView<*>?) {}
+                      }
+              }
+
+              private fun refreshSlotDisplay() {
+                  if (activeWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  val pm = packageManager
+                  for (i in 0..11) {
+                      val pkg = prefs.getAppForSlot(activeWidgetId, i)
+                      if (pkg != null) {
+                          val icon: Drawable?
+                          val label: String
+                          try {
+                              val ai = pm.getApplicationInfo(pkg, 0)
+                              icon  = pm.getApplicationIcon(ai)
+                              label = pm.getApplicationLabel(ai).toString()
+                          } catch (e: Exception) {
+                              iconViews[i].setImageResource(android.R.drawable.ic_dialog_alert)
+                              iconViews[i].visibility = View.VISIBLE
+                              nameViews[i].text = getString(R.string.slot_missing_app)
+                              continue
+                          }
+                          iconViews[i].setImageDrawable(icon)
+                          iconViews[i].visibility = View.VISIBLE
+                          nameViews[i].text = label
+                      } else {
+                          iconViews[i].setImageDrawable(null)
+                          iconViews[i].visibility = View.INVISIBLE
+                          nameViews[i].text = getString(R.string.slot_empty_hint)
+                      }
+                  }
+              }
+
+              private fun openPickerForSlot(slotIndex: Int) {
+                  if (activeWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  pendingSlotIndex = slotIndex
+                  pickerLauncher.launch(Intent(this, AppPickerActivity::class.java))
+              }
+
+              private fun clearSlot(slotIndex: Int) {
+                  if (activeWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  prefs.clearSlot(activeWidgetId, slotIndex)
+                  refreshSlotDisplay()
+                  Toast.makeText(this, getString(R.string.slot_cleared), Toast.LENGTH_SHORT).show()
+              }
+
+              private fun applyAndRefresh() {
+                  if (activeWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                  val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE).apply {
+                      `package` = packageName
+                      putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, intArrayOf(activeWidgetId))
+                  }
+                  sendBroadcast(intent)
+
+                  if (configWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID
+                      && configWidgetId == activeWidgetId) {
+                      setResult(RESULT_OK, Intent().apply {
+                          putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, configWidgetId)
+                      })
+                      finish()
+                  } else {
+                      Toast.makeText(this, getString(R.string.widget_updated), Toast.LENGTH_SHORT).show()
+                  }
+              }
+          }
+          ENDOFFILE
+
+      # ── 15. Kotlin: AppPickerActivity ─────────────────────────────────────────
+      - name: Generate AppPickerActivity.kt
+        run: |
+          cat > app/src/main/kotlin/com/example/shelfwidget/AppPickerActivity.kt << 'ENDOFFILE'
+          package com.example.shelfwidget
+
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.os.Bundle
+          import android.text.Editable
+          import android.text.TextWatcher
+          import android.widget.EditText
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import androidx.recyclerview.widget.RecyclerView
+          import kotlinx.coroutines.CoroutineScope
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.SupervisorJob
+          import kotlinx.coroutines.cancel
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.withContext
+
+          /**
+           * Full-screen searchable launcher-app picker.
+           * Package queries run on Dispatchers.IO. The selected package name is
+           * returned to MainActivity via setResult / EXTRA_PACKAGE_NAME.
+           */
+          class AppPickerActivity : AppCompatActivity() {
+
+              companion object {
+                  const val EXTRA_PACKAGE_NAME = "com.example.shelfwidget.EXTRA_PACKAGE_NAME"
+              }
+
+              private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+              private lateinit var searchView  : EditText
+              private lateinit var recyclerView: RecyclerView
+              private lateinit var adapter     : AppPickerAdapter
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_app_picker)
+                  supportActionBar?.title = getString(R.string.pick_app_title)
+                  supportActionBar?.setDisplayHomeAsUpEnabled(true)
+
+                  searchView   = findViewById(R.id.search_view)
+                  recyclerView = findViewById(R.id.recycler_view)
+
+                  adapter = AppPickerAdapter { appInfo ->
+                      setResult(RESULT_OK, Intent().apply {
+                          putExtra(EXTRA_PACKAGE_NAME, appInfo.packageName)
+                      })
+                      finish()
+                  }
+                  recyclerView.layoutManager = LinearLayoutManager(this)
+                  recyclerView.adapter       = adapter
+
+                  searchView.addTextChangedListener(object : TextWatcher {
+                      override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+                      override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {
+                          adapter.filter(s?.toString() ?: "")
+                      }
+                      override fun afterTextChanged(s: Editable?) {}
+                  })
+
+                  loadApps()
+              }
+
+              override fun onSupportNavigateUp(): Boolean {
+                  setResult(RESULT_CANCELED)
+                  finish()
+                  return true
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  scope.cancel()
+              }
+
+              private fun loadApps() {
+                  scope.launch {
+                      val apps = withContext(Dispatchers.IO) {
+                          val pm         = packageManager
+                          val mainIntent = Intent(Intent.ACTION_MAIN).apply {
+                              addCategory(Intent.CATEGORY_LAUNCHER)
+                          }
+                          pm.queryIntentActivities(mainIntent, PackageManager.MATCH_ALL)
+                              .mapNotNull { ri ->
+                                  try {
+                                      AppInfo(
+                                          name        = ri.loadLabel(pm).toString(),
+                                          packageName = ri.activityInfo.packageName,
+                                          icon        = ri.loadIcon(pm)
+                                      )
+                                  } catch (e: Exception) { null }
+                              }
+                              .distinctBy { it.packageName }
+                              .sortedBy   { it.name.lowercase() }
+                      }
+                      adapter.submitList(apps)
+                  }
+              }
+          }
+          ENDOFFILE
+
+      # ── 16. Kotlin: AppPickerAdapter ─────────────────────────────────────────
+      - name: Generate AppPickerAdapter.kt
+        run: |
+          cat > app/src/main/kotlin/com/example/shelfwidget/AppPickerAdapter.kt << 'ENDOFFILE'
+          package com.example.shelfwidget
+
+          import android.view.LayoutInflater
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.ImageView
+          import android.widget.TextView
+          import androidx.recyclerview.widget.RecyclerView
+
+          /**
+           * RecyclerView adapter for the application picker.
+           * Filtering is case-insensitive and matches both app label and package name.
+           */
+          class AppPickerAdapter(
+              private val onAppSelected: (AppInfo) -> Unit
+          ) : RecyclerView.Adapter<AppPickerAdapter.ViewHolder>() {
+
+              private val allApps      = mutableListOf<AppInfo>()
+              private val filteredApps = mutableListOf<AppInfo>()
+
+              fun submitList(apps: List<AppInfo>) {
+                  allApps.clear()
+                  allApps.addAll(apps)
+                  filter("")
+              }
+
+              fun filter(query: String) {
+                  filteredApps.clear()
+                  if (query.isBlank()) {
+                      filteredApps.addAll(allApps)
+                  } else {
+                      val q = query.trim().lowercase()
+                      filteredApps.addAll(allApps.filter {
+                          it.name.lowercase().contains(q) ||
+                              it.packageName.lowercase().contains(q)
+                      })
+                  }
+                  notifyDataSetChanged()
+              }
+
+              override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+                  val view = LayoutInflater.from(parent.context)
+                      .inflate(R.layout.item_app, parent, false)
+                  return ViewHolder(view)
+              }
+
+              override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+                  val app = filteredApps[position]
+                  holder.icon.setImageDrawable(app.icon)
+                  holder.name.text = app.name
+                  holder.pkg.text  = app.packageName
+                  holder.itemView.setOnClickListener { onAppSelected(app) }
+              }
+
+              override fun getItemCount() = filteredApps.size
+
+              class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+                  val icon: ImageView = view.findViewById(R.id.app_icon)
+                  val name: TextView  = view.findViewById(R.id.app_name)
+                  val pkg : TextView  = view.findViewById(R.id.app_package)
+              }
+          }
+          ENDOFFILE
+
+      # ── 17. Layout: widget_shelf.xml ─────────────────────────────────────────
+      - name: Generate widget_shelf.xml
+        run: |
+          cat > app/src/main/res/layout/widget_shelf.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <!--
+            Home-screen widget layout. Only layouts/views supported by RemoteViews are used.
+            Slot container IDs: slot_0 ... slot_11
+            Icon ImageView IDs:  icon_0 ... icon_11
+          -->
+          <FrameLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent">
+
+              <!-- Procedurally-rendered glass-shelf background bitmap -->
+              <ImageView
+                  android:id="@+id/shelf_background"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:scaleType="fitXY"
+                  android:contentDescription="@null"/>
+
+              <!-- Foreground: 4 equally-weighted rows x 3 equally-weighted slots -->
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:orientation="vertical">
+
+                  <!-- Row 1 -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:orientation="horizontal">
+                      <LinearLayout android:id="@+id/slot_0"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_0"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_1"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_1"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_2"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_2"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                  </LinearLayout>
+
+                  <!-- Row 2 -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:orientation="horizontal">
+                      <LinearLayout android:id="@+id/slot_3"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_3"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_4"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_4"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_5"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_5"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                  </LinearLayout>
+
+                  <!-- Row 3 -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:orientation="horizontal">
+                      <LinearLayout android:id="@+id/slot_6"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_6"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_7"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_7"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_8"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_8"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                  </LinearLayout>
+
+                  <!-- Row 4 -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:layout_weight="1"
+                      android:orientation="horizontal">
+                      <LinearLayout android:id="@+id/slot_9"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_9"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_10"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_10"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                      <LinearLayout android:id="@+id/slot_11"
+                          android:layout_width="0dp" android:layout_height="match_parent"
+                          android:layout_weight="1" android:gravity="center">
+                          <ImageView android:id="@+id/icon_11"
+                              android:layout_width="48dp" android:layout_height="48dp"
+                              android:visibility="invisible" android:contentDescription="@null"/>
+                      </LinearLayout>
+                  </LinearLayout>
+
+              </LinearLayout>
+          </FrameLayout>
+          ENDOFFILE
+
+      # ── 18. Layout: activity_main.xml ─────────────────────────────────────────
+      - name: Generate activity_main.xml
+        run: |
+          cat > app/src/main/res/layout/activity_main.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:background="@color/background">
+
+              <TextView
+                  android:id="@+id/no_widget_text"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:gravity="center"
+                  android:padding="24dp"
+                  android:text="@string/no_widgets_hint"
+                  android:textSize="16sp"
+                  android:textColor="@color/text_secondary"
+                  android:visibility="gone"/>
+
+              <Spinner
+                  android:id="@+id/widget_spinner"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_margin="8dp"/>
+
+              <ScrollView
+                  android:id="@+id/slot_section"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1">
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:padding="8dp">
+
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/long_press_clear"
+                          android:textSize="12sp"
+                          android:textColor="@color/text_secondary"
+                          android:gravity="center"
+                          android:paddingBottom="8dp"/>
+
+                      <!-- Row 1: slots 0-2 -->
+                      <LinearLayout android:layout_width="match_parent"
+                          android:layout_height="wrap_content" android:orientation="horizontal"
+                          android:layout_marginBottom="6dp">
+                          <LinearLayout android:id="@+id/slot_card_0"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_0"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_0"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_1"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp"
+                              android:layout_marginStart="3dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_1"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_1"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_2"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginStart="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_2"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_2"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                      </LinearLayout>
+
+                      <!-- Row 2: slots 3-5 -->
+                      <LinearLayout android:layout_width="match_parent"
+                          android:layout_height="wrap_content" android:orientation="horizontal"
+                          android:layout_marginBottom="6dp">
+                          <LinearLayout android:id="@+id/slot_card_3"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_3"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_3"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_4"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp"
+                              android:layout_marginStart="3dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_4"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_4"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_5"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginStart="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_5"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_5"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                      </LinearLayout>
+
+                      <!-- Row 3: slots 6-8 -->
+                      <LinearLayout android:layout_width="match_parent"
+                          android:layout_height="wrap_content" android:orientation="horizontal"
+                          android:layout_marginBottom="6dp">
+                          <LinearLayout android:id="@+id/slot_card_6"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_6"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_6"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_7"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp"
+                              android:layout_marginStart="3dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_7"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_7"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_8"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginStart="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_8"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_8"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                      </LinearLayout>
+
+                      <!-- Row 4: slots 9-11 -->
+                      <LinearLayout android:layout_width="match_parent"
+                          android:layout_height="wrap_content" android:orientation="horizontal">
+                          <LinearLayout android:id="@+id/slot_card_9"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_9"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_9"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_10"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp"
+                              android:layout_marginStart="3dp" android:layout_marginEnd="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_10"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_10"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                          <LinearLayout android:id="@+id/slot_card_11"
+                              android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical"
+                              android:gravity="center" android:padding="6dp" android:layout_marginStart="3dp"
+                              android:background="@drawable/slot_card_bg">
+                              <ImageView android:id="@+id/slot_icon_11"
+                                  android:layout_width="48dp" android:layout_height="48dp"
+                                  android:scaleType="centerCrop" android:visibility="invisible"/>
+                              <TextView android:id="@+id/slot_name_11"
+                                  android:layout_width="match_parent" android:layout_height="wrap_content"
+                                  android:gravity="center" android:maxLines="1" android:ellipsize="end"
+                                  android:textSize="10sp" android:textColor="@color/text_primary"
+                                  android:text="@string/slot_empty_hint"/>
+                          </LinearLayout>
+                      </LinearLayout>
+
+                  </LinearLayout>
+              </ScrollView>
+
+              <Button
+                  android:id="@+id/apply_button"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_margin="8dp"
+                  android:text="@string/apply_button"
+                  style="@style/Widget.AppCompat.Button.Colored"/>
+
+          </LinearLayout>
+          ENDOFFILE
+
+      # ── 19. Layout: activity_app_picker.xml ──────────────────────────────────
+      - name: Generate activity_app_picker.xml and item_app.xml
+        run: |
+          cat > app/src/main/res/layout/activity_app_picker.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:background="@color/background">
+
+              <EditText
+                  android:id="@+id/search_view"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:hint="@string/search_apps"
+                  android:imeOptions="actionSearch"
+                  android:inputType="text"
+                  android:padding="12dp"
+                  android:singleLine="true"
+                  android:background="@color/surface"/>
+
+              <View
+                  android:layout_width="match_parent"
+                  android:layout_height="1dp"
+                  android:background="@color/divider"/>
+
+              <androidx.recyclerview.widget.RecyclerView
+                  android:id="@+id/recycler_view"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:scrollbars="vertical"/>
+          </LinearLayout>
+          ENDOFFILE
+
+          cat > app/src/main/res/layout/item_app.xml << 'ENDOFFILE2'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="horizontal"
+              android:padding="12dp"
+              android:gravity="center_vertical"
+              android:background="?attr/selectableItemBackground">
+
+              <ImageView
+                  android:id="@+id/app_icon"
+                  android:layout_width="48dp"
+                  android:layout_height="48dp"
+                  android:contentDescription="@null"/>
+
+              <LinearLayout
+                  android:layout_width="0dp"
+                  android:layout_height="wrap_content"
+                  android:layout_weight="1"
+                  android:orientation="vertical"
+                  android:paddingStart="12dp"
+                  android:paddingEnd="4dp">
+                  <TextView
+                      android:id="@+id/app_name"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:textSize="16sp"
+                      android:textColor="@color/text_primary"
+                      android:maxLines="1"
+                      android:ellipsize="end"/>
+                  <TextView
+                      android:id="@+id/app_package"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:textSize="11sp"
+                      android:textColor="@color/text_secondary"
+                      android:maxLines="1"
+                      android:ellipsize="end"/>
+              </LinearLayout>
+          </LinearLayout>
+          ENDOFFILE2
+
+      # ── 20. XML: shelf_widget_info.xml ────────────────────────────────────────
+      - name: Generate shelf_widget_info.xml
+        run: |
+          cat > app/src/main/res/xml/shelf_widget_info.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <!--
+            AppWidgetProviderInfo for ShelfWidget.
+            Primary target: Xiaomi Pad 8 landscape (targetCellWidth=2, targetCellHeight=4).
+            minWidth/minHeight: legacy fallback for launchers that ignore targetCell attributes.
+            updatePeriodMillis=0: updates driven by explicit broadcasts from MainActivity.
+            configure: MainActivity handles both placement-config and direct app-drawer launch.
+          -->
+          <appwidget-provider
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:minWidth="160dp"
+              android:minHeight="220dp"
+              android:targetCellWidth="2"
+              android:targetCellHeight="4"
+              android:minResizeWidth="100dp"
+              android:minResizeHeight="110dp"
+              android:maxResizeWidth="800dp"
+              android:maxResizeHeight="800dp"
+              android:resizeMode="horizontal|vertical"
+              android:widgetCategory="home_screen"
+              android:updatePeriodMillis="0"
+              android:initialLayout="@layout/widget_shelf"
+              android:previewLayout="@layout/widget_shelf"
+              android:configure="com.example.shelfwidget.MainActivity"/>
+          ENDOFFILE
+
+      # ── 21. Values: strings, colors, themes ───────────────────────────────────
+      - name: Generate value resources
+        run: |
+          cat > app/src/main/res/values/strings.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">ShelfWidget</string>
+              <string name="app_name_full">Shelf Widget Manager</string>
+              <string name="no_widgets_hint">No ShelfWidget instances found.\nAdd the widget to your home screen first, then open this app to configure it.</string>
+              <string name="apply_button">Apply &amp; Refresh Widget</string>
+              <string name="slot_empty_hint">Tap to add</string>
+              <string name="slot_missing_app">App not found</string>
+              <string name="slot_cleared">Slot cleared</string>
+              <string name="widget_updated">Widget updated!</string>
+              <string name="pick_app_title">Choose App</string>
+              <string name="search_apps">Search apps…</string>
+              <string name="long_press_clear">Long-press a slot to clear it</string>
+          </resources>
+          ENDOFFILE
+
+          cat > app/src/main/res/values/colors.xml << 'ENDOFFILE2'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="colorPrimary">#3F51B5</color>
+              <color name="colorPrimaryDark">#303F9F</color>
+              <color name="colorAccent">#FF4081</color>
+              <color name="background">#F0F2F8</color>
+              <color name="surface">#FFFFFF</color>
+              <color name="divider">#DDDDDD</color>
+              <color name="slot_card_bg">#FFFFFF</color>
+              <color name="slot_card_border">#CCCCCC</color>
+              <color name="text_primary">#212121</color>
+              <color name="text_secondary">#757575</color>
+          </resources>
+          ENDOFFILE2
+
+          cat > app/src/main/res/values/themes.xml << 'ENDOFFILE3'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.ShelfWidget" parent="Theme.AppCompat.Light.DarkActionBar">
+                  <item name="colorPrimary">@color/colorPrimary</item>
+                  <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+                  <item name="colorAccent">@color/colorAccent</item>
+                  <item name="android:windowBackground">@color/background</item>
+              </style>
+          </resources>
+          ENDOFFILE3
+
+      # ── 22. Drawables + adaptive icon XMLs ───────────────────────────────────
+      - name: Generate drawable and mipmap resources
+        run: |
+          # Slot card background
+          cat > app/src/main/res/drawable/slot_card_bg.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="@color/slot_card_bg"/>
+              <corners android:radius="8dp"/>
+              <stroke android:width="1dp" android:color="@color/slot_card_border"/>
+          </shape>
+          ENDOFFILE
+
+          # Adaptive icon background
+          cat > app/src/main/res/drawable/ic_launcher_background.xml << 'ENDOFFILE2'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="#3F51B5"/>
+          </shape>
+          ENDOFFILE2
+
+          # Adaptive icon foreground – three white shelf planks
+          cat > app/src/main/res/drawable/ic_launcher_foreground.xml << 'ENDOFFILE3'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M18,28 L90,28 Q94,28 94,32 L94,38 Q94,42 90,42 L18,42 Q14,42 14,38 L14,32 Q14,28 18,28Z"/>
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M18,50 L90,50 Q94,50 94,54 L94,60 Q94,64 90,64 L18,64 Q14,64 14,60 L14,54 Q14,50 18,50Z"/>
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M18,72 L90,72 Q94,72 94,76 L94,82 Q94,86 90,86 L18,86 Q14,86 14,82 L14,76 Q14,72 18,72Z"/>
+          </vector>
+          ENDOFFILE3
+
+          # Adaptive icons (mipmap-anydpi-v26)
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'ENDOFFILE4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          ENDOFFILE4
+
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml << 'ENDOFFILE5'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          ENDOFFILE5
+
+      # ── 23. Verify generated file tree ────────────────────────────────────────
+      - name: Verify project structure
+        run: |
+          echo "=== Project file tree ==="
+          find . -not -path './.git/*' -not -name '*.class' | sort
+          echo ""
+          echo "=== Kotlin sources ==="
+          find app/src/main/kotlin -name '*.kt' | sort
+          echo ""
+          echo "=== Resources ==="
+          find app/src/main/res -type f | sort
+
+      # ── 24. Setup Gradle cache ────────────────────────────────────────────────
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # ── 25. Build debug APK ───────────────────────────────────────────────────
+      - name: Build debug APK
+        run: |
+          echo "=== Starting assembleDebug ==="
+          ./gradlew assembleDebug --no-daemon --stacktrace
+          echo "=== Build finished ==="
+
+      # ── 26. Verify APK exists ─────────────────────────────────────────────────
+      - name: Verify APK output
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found at $APK"
+            find app/build -name '*.apk' 2>/dev/null || echo "No APKs found"
+            exit 1
+          fi
+          ls -lh "$APK"
+          echo "SUCCESS: APK built at $APK"
+
+      # ── 27. Upload APK artifact ───────────────────────────────────────────────
+      - name: Upload ShelfWidget APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShelfWidget-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
